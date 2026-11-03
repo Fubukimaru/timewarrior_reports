@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import io
 import json
 import os
@@ -22,12 +22,12 @@ class ReportTests(unittest.TestCase):
 
     def test_week_target_and_missing_time(self):
         records = json.loads(Path("examples/week.json").read_text())
-        groups, entries = report.summarize(records, self.start, self.end, self.now, "tags")
+        groups, _ = report.summarize(records, self.start, self.end, self.now)
         self.assertEqual(sum(value for _, value in groups), 20 * 3600)
         self.assertEqual(dict(groups)["Development"], 15 * 3600)
         target = report.expected_seconds(self.start, self.end, self.zone, 37.5)
         self.assertEqual(target, 37.5 * 3600)
-        output = report.render(groups, entries, self.start, self.end, self.zone, target, False)
+        output = report.render(groups, self.start, self.end, self.zone, target, False)
         self.assertIn("Untracked: 17h 30m", output)
         self.assertIn("46.7%", output)
         self.assertNotIn("\033", output)
@@ -37,14 +37,15 @@ class ReportTests(unittest.TestCase):
             {"start": "20261025T220000Z", "end": "20261026T010000Z", "tags": ["b", "a"]},
             {"start": "20261101T220000Z", "tags": ["a", "b"]},
         ]
-        groups, entries = report.summarize(records, self.start, self.end, self.now, "tags")
+        groups, _ = report.summarize(records, self.start, self.end, self.now)
         self.assertEqual(groups, [("a, b", 3 * 3600)])
-        groups, _ = report.summarize(records, self.start, self.end, report.timestamp("20261101T223000Z"), "tags")
+        groups, _ = report.summarize(records, self.start, self.end, report.timestamp("20261101T223000Z"))
         self.assertEqual(groups, [("a, b", 2.5 * 3600)])
 
     def test_weekday_proration_and_dst(self):
-        for first in (date(2026, 3, 23), date(2026, 10, 19)):
-            start, end = report.period_bounds("week", first, self.zone)
+        for monday in (date(2026, 3, 23), date(2026, 10, 19)):
+            start = report.boundary(monday, self.zone)
+            end = report.boundary(monday + timedelta(days=7), self.zone)
             self.assertEqual(report.expected_seconds(start, end, self.zone, 37.5), 135000)
         weekend_start = report.boundary(date(2026, 10, 31), self.zone)
         self.assertEqual(report.expected_seconds(weekend_start, self.end, self.zone, 37.5), 0)
@@ -52,37 +53,61 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(report.expected_seconds(self.start, midday, self.zone, 37.5), 3.75 * 3600)
 
     def test_empty_and_overtime(self):
-        empty = report.render([], [], self.start, self.end, self.zone, 135000, False)
+        empty = report.render([], self.start, self.end, self.zone, 135000, False)
         self.assertIn("Untracked: 37h 30m", empty)
-        overtime = report.render([("work", 40 * 3600)], [], self.start, self.end, self.zone, 135000, False)
+        overtime = report.render([("work", 40 * 3600)], self.start, self.end, self.zone, 135000, False)
         self.assertIn("Over target: 2h 30m", overtime)
         self.assertIn("Untracked: 0h 00m", overtime)
         self.assertIn("100.0%", overtime)
-        self.assertIn("no time to chart", report.render([], [], self.start, self.end, self.zone, 0, False))
+        self.assertIn("no time to chart", report.render([], self.start, self.end, self.zone, 0, False))
+
+    def test_palette_has_at_least_32_unique_colors(self):
+        self.assertGreaterEqual(len(report.COLORS), 32)
+        self.assertEqual(len(set(report.COLORS[:32])), 32)
+        self.assertEqual(report.COLORS[:len(report.BASE_COLORS)], report.BASE_COLORS)
 
     def test_overlap_rejected(self):
         records = [{"start": "20261026T080000Z", "end": "20261026T100000Z"},
                    {"start": "20261026T090000Z", "end": "20261026T110000Z"}]
         with self.assertRaisesRegex(ValueError, "Overlapping"):
-            report.summarize(records, self.start, self.end, self.now, "tags")
+            report.summarize(records, self.start, self.end, self.now)
 
-    def test_annotation_and_terminal_controls(self):
-        records = [{"start": "20261026T080000Z", "end": "20261026T090000Z", "annotation": "hello\n\033[2J"}]
-        groups, _ = report.summarize(records, self.start, self.end, self.now, "annotation")
+    def test_tag_and_terminal_controls(self):
+        records = [{"start": "20261026T080000Z", "end": "20261026T090000Z", "tags": ["hello\n\033[2J"]}]
+        groups, _ = report.summarize(records, self.start, self.end, self.now)
         self.assertNotIn("\033", groups[0][0])
         self.assertNotIn("\n", groups[0][0])
 
-    def test_bad_dates_and_invalid_hours(self):
-        for args in (["--from", "2026-10-26"], ["--weekly-hours", "nan"],
-                     ["--from", "2026-11-02", "--to", "2026-10-26"]):
-            with patch("sys.stderr", new=io.StringIO()):
-                self.assertEqual(report.main(args), 2)
+    def test_out_of_work_tags_are_reported_but_excluded_from_work_and_pie(self):
+        records = [
+            {"start": "20261026T070000Z", "end": "20261026T080000Z", "tags": ["fundae"]},
+            {"start": "20261026T080000Z", "end": "20261026T100000Z", "tags": ["deporte", "personal"]},
+            {"start": "20261026T100000Z", "end": "20261026T110000Z", "tags": ["fundraising"]},
+        ]
+        groups, _ = report.summarize(records, self.start, self.end, self.now)
+        self.assertEqual(dict(groups), {"Out from work": 3 * 3600, "fundraising": 3600})
+        output = report.render(groups, self.start, self.end, self.zone, 7.5 * 3600, False)
+        self.assertIn("Tracked: 1h 00m  |  Untracked: 6h 30m", output)
+        self.assertIn("Out from work: 3h 00m", output)
+        self.assertNotIn("Out from work", output.split("Distribution", 1)[1])
+
+    def test_out_of_work_only_does_not_create_work_pie_slices(self):
+        groups, _ = report.summarize(
+            [{"start": "20261026T070000Z", "end": "20261026T080000Z", "tags": ["fundae"]}],
+            self.start, self.end, self.now)
+        with patch.object(report, "pie", wraps=report.pie) as pie_renderer:
+            output = report.render(groups, self.start, self.end, self.zone, 3600, False)
+        self.assertIn("Tracked: 0h 00m  |  Untracked: 1h 00m", output)
+        self.assertIn("Out from work: 1h 00m", output)
+        self.assertEqual([name for name, _, _ in pie_renderer.call_args.args[0]], ["untracked"])
 
     def test_extension_protocol(self):
         payload = "temp.report.start: 20261025T230000Z\ntemp.report.end: 20261101T230000Z\n\n[]"
-        with patch("sys.stdin", new=io.StringIO(payload)), patch("sys.stdout", new=io.StringIO()) as output:
-            self.assertEqual(report.main(["--extension", "--timezone", "Europe/Madrid", "--weekly-hours", "37.5"]), 0)
-        self.assertIn("Untracked: 37h 30m", output.getvalue())
+        with patch.dict(os.environ, {"TZ": "Europe/Madrid"}), \
+             patch("sys.stdin", new=io.StringIO(payload)), \
+             patch("sys.stdout", new=io.StringIO()) as output:
+            self.assertEqual(report.run_extension("pie"), 0)
+        self.assertIn("Untracked: 35h 00m", output.getvalue())
 
     def test_extension_color_setting_and_no_color(self):
         for setting, no_color, expected in (("on", False, True), ("off", False, False), ("on", True, False)):
@@ -92,8 +117,9 @@ class ReportTests(unittest.TestCase):
                 environment.pop("NO_COLOR", None)
                 if no_color:
                     environment["NO_COLOR"] = "1"
+                environment["TZ"] = "Europe/Madrid"
                 with patch.dict(os.environ, environment, clear=True), patch("sys.stdin", new=io.StringIO(payload)), patch("sys.stdout", new=io.StringIO()) as output:
-                    self.assertEqual(report.main(["--extension", "--timezone", "Europe/Madrid"]), 0)
+                    self.assertEqual(report.run_extension("pie"), 0)
                 self.assertEqual("\033[" in output.getvalue(), expected)
 
     @unittest.skipUnless(shutil.which("timew"), "Timewarrior is not installed")
@@ -107,13 +133,9 @@ class ReportTests(unittest.TestCase):
             extensions.joinpath("calendar_grid").symlink_to(Path("calendar_grid").resolve())
             imported = subprocess.run(["timew", "import", "examples/week.json"], env=environment, capture_output=True, text=True)
             self.assertEqual(imported.returncode, 0, imported.stderr)
-            cli = subprocess.run([sys_executable(), "timew_report.py", "--from", "2026-10-26", "--to", "2026-11-02", "--color", "never", "--weekly-hours", "37.5"], env=environment, capture_output=True, text=True)
-            self.assertEqual(cli.returncode, 0, cli.stderr)
-            self.assertIn("Untracked: 17h 30m", cli.stdout)
             extension = subprocess.run(["timew", "pie_chart", "2026-10-26", "-", "2026-11-02"], env=environment, capture_output=True, text=True)
             self.assertEqual(extension.returncode, 0, extension.stderr)
-            default_hours = report.parser().get_default("weekly_hours")
-            self.assertIn(f"Untracked: {report.duration(max(0, default_hours - 20) * 3600)}", extension.stdout)
+            self.assertIn("Untracked: 15h 00m", extension.stdout)
             environment.pop("NO_COLOR", None)
             for hint, expected in ((":color", True), (":nocolor", False)):
                 with self.subTest(hint=hint):
@@ -125,12 +147,6 @@ class ReportTests(unittest.TestCase):
                     self.assertIn("CALENDAR GRID", calendar.stdout)
                     self.assertIn("5:00/", calendar.stdout)
                     self.assertEqual("\033[38;5;" in calendar.stdout, expected)
-
-
-def sys_executable():
-    import sys
-    return sys.executable
-
 
 if __name__ == "__main__":
     unittest.main()

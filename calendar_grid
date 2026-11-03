@@ -4,6 +4,6 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from timew_report import main
+from timew_report import run_extension
 
-raise SystemExit(main(["--extension", "--view", "calendar"]))
+raise SystemExit(run_extension("calendar"))

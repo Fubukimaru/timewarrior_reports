@@ -1,19 +1,38 @@
-"""Read-only Timewarrior reporting, using only the Python standard library."""
-import argparse
+"""Shared calculations and pie rendering for the Timewarrior report extensions."""
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
+import colorsys
 import json
 import math
 import os
-from pathlib import Path
 import re
-import subprocess
 import sys
 from zoneinfo import ZoneInfo
 
 UTC = timezone.utc
-COLORS = (33, 39, 75, 141, 205, 214, 118, 44)
+BASE_COLORS = (33, 39, 75, 141, 205, 214, 118, 44)
+OUT_OF_WORK_TAGS = ("fundae", "deporte")
+OUT_OF_WORK_LABEL = "Out from work"
+WEEKLY_HOURS = 35
+
+
+def build_palette():
+    levels = (0, 95, 135, 175, 215, 255)
+    colors = list(BASE_COLORS)
+    for step in range(360):
+        rgb = colorsys.hsv_to_rgb(step / 360, 0.85, 0.95)
+        channels = [min(range(6), key=lambda i: abs(levels[i] - round(channel * 255)))
+                    for channel in rgb]
+        color = 16 + 36 * channels[0] + 6 * channels[1] + channels[2]
+        if color not in colors:
+            colors.append(color)
+        if len(colors) == 32:
+            break
+    return tuple(colors)
+
+
+COLORS = build_palette()
 
 
 def local_zone():
@@ -34,20 +53,6 @@ def timestamp(value):
 
 def boundary(day, zone):
     return datetime.combine(day, time.min, zone).astimezone(UTC)
-
-
-def period_bounds(period, today, zone):
-    if period == "today":
-        start, end = today, today + timedelta(days=1)
-    elif period in ("week", "lastweek"):
-        start = today - timedelta(days=today.weekday())
-        if period == "lastweek":
-            start -= timedelta(days=7)
-        end = start + timedelta(days=7)
-    else:
-        start = today.replace(day=1)
-        end = (start + timedelta(days=32)).replace(day=1)
-    return boundary(start, zone), boundary(end, zone)
 
 
 def expected_seconds(start, end, zone, weekly_hours):
@@ -74,16 +79,16 @@ class Entry:
     label: str
     start: datetime
     end: datetime
-    identifier: str
 
     @property
     def seconds(self):
         return (self.end - self.start).total_seconds()
 
 
-def summarize(records, start, end, now, group_by):
+def summarize(records, start, end, now):
     if not isinstance(records, list):
         raise ValueError("Expected a JSON array of Timewarrior intervals")
+    out_of_work_tags = set(OUT_OF_WORK_TAGS)
     entries = []
     totals = defaultdict(float)
     for record in records:
@@ -97,12 +102,12 @@ def summarize(records, start, end, now, group_by):
         tags = record.get("tags", [])
         if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
             raise ValueError("Interval tags must be a list of strings")
-        if group_by == "annotation":
-            label = record.get("annotation") or ", ".join(sorted(set(tags))) or "untagged"
+        if out_of_work_tags.intersection(tags):
+            label = OUT_OF_WORK_LABEL
         else:
             label = ", ".join(sorted(set(tags))) or "untagged"
         label = safe_label(label)
-        entry = Entry(label, left, right, safe_label(record.get("id", "-")))
+        entry = Entry(label, left, right)
         entries.append(entry)
         totals[label] += entry.seconds
     entries.sort(key=lambda entry: entry.start)
@@ -149,15 +154,19 @@ def pie(slices, color):
     return rows
 
 
-def render(groups, entries, start, end, zone, target, color, details=False):
-    tracked = sum(value for _, value in groups)
+def render(groups, start, end, zone, target, color):
+    work_groups = [(name, value) for name, value in groups if name != OUT_OF_WORK_LABEL]
+    out_of_work = sum(value for name, value in groups if name == OUT_OF_WORK_LABEL)
+    tracked = sum(value for _, value in work_groups)
     untracked = max(0, target - tracked)
     denominator = max(target, tracked)
-    slices = [(name, value, index) for index, (name, value) in enumerate(groups)]
+    slices = [(name, value, index) for index, (name, value) in enumerate(work_groups)]
     slices.append(("untracked", untracked, -1))
     lines = ["TIMEWARRIOR · TIME DISTRIBUTION",
              f"Period: {start.astimezone(zone):%Y-%m-%d %H:%M %Z} → {end.astimezone(zone):%Y-%m-%d %H:%M %Z} (end exclusive)",
              f"Target: {duration(target)}  |  Tracked: {duration(tracked)}  |  Untracked: {duration(untracked)}"]
+    if out_of_work:
+        lines.append(f"Out from work: {duration(out_of_work)}")
     if tracked > target:
         lines.append(f"Over target: {duration(tracked - target)}")
     lines += ["", "Distribution (share of the greater of target or tracked time)"]
@@ -170,83 +179,140 @@ def render(groups, entries, start, end, zone, target, color, details=False):
         lines.append(paint(f"{marker:>2}  {label:<{width}}  {duration(value):>9}  {share:6.1%}  {bar}", palette, color))
     lines.append("")
     lines.extend(pie(slices, color))
-    if details:
-        lines += ["", "Intervals (clipped to the period; running timers end at now)"]
-        for entry in entries:
-            lines.append(f"@{entry.identifier}  {entry.start.astimezone(zone):%Y-%m-%d %H:%M} → "
-                         f"{entry.end.astimezone(zone):%Y-%m-%d %H:%M}  {duration(entry.seconds):>9}  {entry.label}")
-        if not entries:
-            lines.append("  No tracked intervals.")
     return "\n".join(lines)
 
 
-def parser():
-    result = argparse.ArgumentParser(description="Visual Timewarrior reports against a working-week target.")
-    result.add_argument("period", nargs="?", choices=("week", "lastweek", "month", "today"), default="week")
-    result.add_argument("--from", dest="start_date", type=date.fromisoformat, help="First date, inclusive (YYYY-MM-DD)")
-    result.add_argument("--to", dest="end_date", type=date.fromisoformat, help="End date, exclusive (YYYY-MM-DD)")
-    result.add_argument("--weekly-hours", type=float, default=35)
-    result.add_argument("--timezone", help="IANA timezone, e.g. Europe/Madrid (default: system timezone)")
-    result.add_argument("--tag", action="append", default=[], help="Filter by tag; repeat to require multiple tags")
-    result.add_argument("--group-by", choices=("tags", "annotation"), default="tags")
-    result.add_argument("--view", choices=("pie", "calendar"), default="pie", help="Report layout (default: pie)")
-    result.add_argument("--details", action="store_true", help="Also list individual intervals")
-    result.add_argument("--input", type=Path, help="Read a timew export JSON file; '-' reads stdin")
-    result.add_argument("--color", choices=("auto", "always", "never"), default="auto")
-    result.add_argument("--extension", action="store_true", help="Read the Timewarrior extension protocol from stdin")
-    return result
+def daily_totals(entries, start, end, zone):
+    """Split intervals at local midnights, using UTC elapsed time across DST."""
+    days = {}
+    day = start.astimezone(zone).date()
+    while boundary(day, zone) < end:
+        days[day] = defaultdict(float)
+        day += timedelta(days=1)
+    for entry in entries:
+        left, right = max(entry.start, start), min(entry.end, end)
+        while left < right:
+            day = left.astimezone(zone).date()
+            midnight = boundary(day + timedelta(days=1), zone)
+            stop = min(right, midnight)
+            days[day][entry.label] += (stop - left).total_seconds()
+            left = stop
+    return days
 
 
-def main(argv=None):
-    argument_parser = parser()
-    args = argument_parser.parse_args(argv)
+def allocate(weights, size):
+    """Largest-remainder rounding keeps each cell exactly the requested size."""
+    total = sum(weights)
+    if not total:
+        return [0] * len(weights)
+    exact = [weight / total * size for weight in weights]
+    counts = [math.floor(value) for value in exact]
+    remainder = size - sum(counts)
+    order = sorted(range(len(weights)), key=lambda i: (-(exact[i] - counts[i]), i))
+    for i in order[:remainder]:
+        counts[i] += 1
+    return counts
+
+
+def marker(index):
+    return str(index + 1) if index < 9 else chr(65 + (index - 9) % 26)
+
+
+def clock(seconds):
+    minutes = int(seconds / 60 + 0.5)
+    return f"{minutes // 60}:{minutes % 60:02d}"
+
+
+def render_calendar(groups, entries, start, end, zone, weekly_hours, color):
+    work_groups = [(label, value) for label, value in groups if label != OUT_OF_WORK_LABEL]
+    out_of_work = sum(value for label, value in groups if label == OUT_OF_WORK_LABEL)
+    work_entries = [entry for entry in entries if entry.label != OUT_OF_WORK_LABEL]
+    days = daily_totals(work_entries, start, end, zone)
+    targets = {day: expected_seconds(max(start, boundary(day, zone)),
+                                   min(end, boundary(day + timedelta(days=1), zone)),
+                                   zone, weekly_hours) for day in days}
+    tracked = sum(value for _, value in work_groups)
+    target = sum(targets.values())
+    gaps = sum(max(0, targets[day] - sum(totals.values())) for day, totals in days.items())
+    overtime = sum(max(0, sum(totals.values()) - targets[day]) for day, totals in days.items())
+    lines = ["TIMEWARRIOR · CALENDAR GRID",
+             f"Period: {start.astimezone(zone):%Y-%m-%d %H:%M %Z} → {end.astimezone(zone):%Y-%m-%d %H:%M %Z} (end exclusive)",
+             f"Target: {duration(target)}  |  Tracked: {duration(tracked)}  |  Untracked: {duration(max(0, target - tracked))}",
+             f"Daily gaps: {duration(gaps)}  |  Daily overtime: {duration(overtime)}",
+             "", "Each cell: task shares of daily target (or tracked time when over target).",
+             "Gray / . = untracked; footer = tracked/target; + = over daily target.", ""]
+    if out_of_work:
+        lines.insert(4, f"Out from work: {duration(out_of_work)}")
+    indices = {label: i for i, (label, _) in enumerate(work_groups)}
+    width, rows = 10, 3
+    empty = [" " * width] * (rows + 2)
+
+    def cell(day):
+        if day not in days:
+            return empty
+        totals = days[day]
+        daily_tracked = sum(totals.values())
+        missing = max(0, targets[day] - daily_tracked)
+        slices = [(label, totals[label], indices[label]) for label, _ in work_groups if totals.get(label)]
+        slices.append(("untracked", missing, -1))
+        counts = allocate([value for _, value, _ in slices], width * rows)
+        pixels = []
+        for (_, _, index), count in zip(slices, counts):
+            symbol = "." if index == -1 else marker(index)
+            pixels.extend([paint("█" if color else symbol, index, color)] * count)
+        if not pixels:
+            pixels = [" "] * (width * rows)
+        fill = ["".join(pixels[offset:offset + width]) for offset in range(0, width * rows, width)][::-1]
+        footer = f"{clock(daily_tracked)}/{clock(targets[day])}"
+        if not daily_tracked and not targets[day]:
+            footer = "off"
+        if len(footer) > width:
+            footer = f"{clock(daily_tracked)} trk"
+        heading = f"{day:%d %b}" + (" +" if daily_tracked > targets[day] else "")
+        return [heading.ljust(width), *fill, footer[:width].ljust(width)]
+
+    first = min(days)
+    last = max(days)
+    monday = first - timedelta(days=first.weekday())
+    lines.append(" " + " ".join(name.center(width) for name in ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")))
+    border = "+" + "+".join("-" * width for _ in range(7)) + "+"
+    lines.append(border)
+    while monday <= last:
+        cells = [cell(monday + timedelta(days=i)) for i in range(7)]
+        for row in range(rows + 2):
+            lines.append("|" + "|".join(column[row] for column in cells) + "|")
+        lines.append(border)
+        monday += timedelta(days=7)
+    lines += ["", "Tasks (colors stay the same across all days)"]
+    for index, (label, seconds) in enumerate(work_groups):
+        lines.append(paint(f" {marker(index):>2}  {label}  {duration(seconds)}", index, color))
+    lines.append(paint(f"  .  untracked (daily gaps)  {duration(gaps)}", -1, color))
+    lines.append("Small tasks may round to zero blocks; all durations are included in the totals.")
+    return "\n".join(lines)
+
+
+def run_extension(view):
     try:
-        zone = ZoneInfo(args.timezone) if args.timezone else local_zone()
+        if view not in ("pie", "calendar"):
+            raise ValueError(f"Unknown report view: {view}")
+        zone = local_zone()
         now = datetime.now(UTC)
-        if not math.isfinite(args.weekly_hours) or args.weekly_hours <= 0:
-            raise ValueError("--weekly-hours must be a positive finite number")
-        if bool(args.start_date) != bool(args.end_date):
-            raise ValueError("Use --from and --to together")
-        config = {}
-        if args.extension:
-            header, payload = sys.stdin.read().split("\n\n", 1)
-            config = dict(line.split(": ", 1) for line in header.splitlines() if ": " in line)
-            if not config.get("temp.report.start") or not config.get("temp.report.end"):
-                raise ValueError("Extension requires a finite period, e.g. timew report pie_chart :week")
-            start, end = timestamp(config["temp.report.start"]), timestamp(config["temp.report.end"])
-            records = json.loads(payload)
-        else:
-            start, end = (boundary(args.start_date, zone), boundary(args.end_date, zone)) if args.start_date else period_bounds(args.period, now.astimezone(zone).date(), zone)
-            if start >= end:
-                raise ValueError("The end date must be after the start date")
-            if args.input:
-                records = json.loads(sys.stdin.read() if str(args.input) == "-" else args.input.read_text())
-            else:
-                command = ["timew", "export", start.strftime("%Y%m%dT%H%M%SZ"), "-", end.strftime("%Y%m%dT%H%M%SZ"), *args.tag]
-                exported = subprocess.run(command, capture_output=True, text=True, check=False)
-                if exported.returncode:
-                    raise ValueError(exported.stderr.strip() or exported.stdout.strip() or "Timewarrior export failed")
-                records = json.loads(exported.stdout)
+        header, payload = sys.stdin.read().split("\n\n", 1)
+        config = dict(line.split(": ", 1) for line in header.splitlines() if ": " in line)
+        if not config.get("temp.report.start") or not config.get("temp.report.end"):
+            raise ValueError("Extension requires a finite period")
+        start, end = timestamp(config["temp.report.start"]), timestamp(config["temp.report.end"])
         if start >= end:
             raise ValueError("The end date must be after the start date")
-        if args.tag:
-            if not isinstance(records, list):
-                raise ValueError("Expected a JSON array of Timewarrior intervals")
-            records = [record for record in records if all(tag in record.get("tags", []) for tag in args.tag)]
-        groups, entries = summarize(records, start, end, now, args.group_by)
-        target = expected_seconds(start, end, zone, args.weekly_hours)
-        # Timewarrior captures extension stdout, so isatty() is false even when
-        # the parent is displaying the report in a terminal. Its protocol carries
-        # the resolved color setting, including :color / :nocolor overrides.
-        terminal_color = sys.stdout.isatty()
-        if args.extension and "color" in config:
-            terminal_color = config["color"].strip().lower() in ("on", "1", "yes", "y", "true")
-        color = args.color == "always" or (args.color == "auto" and terminal_color and "NO_COLOR" not in os.environ)
-        if args.view == "calendar":
-            from calendar_report import render_calendar
-            print(render_calendar(groups, entries, start, end, zone, args.weekly_hours, color))
+        records = json.loads(payload)
+        groups, entries = summarize(records, start, end, now)
+        color = config.get("color", "").strip().lower() in ("on", "1", "yes", "y", "true")
+        color = color and "NO_COLOR" not in os.environ
+        if view == "calendar":
+            print(render_calendar(groups, entries, start, end, zone, WEEKLY_HOURS, color))
         else:
-            print(render(groups, entries, start, end, zone, target, color, args.details))
+            target = expected_seconds(start, end, zone, WEEKLY_HOURS)
+            print(render(groups, start, end, zone, target, color))
         return 0
     except (ValueError, KeyError, TypeError, OSError) as error:
         print(f"timew-report: {error}", file=sys.stderr)
@@ -254,4 +320,5 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    print("Run this report through Timewarrior: timew report pie_chart or calendar_grid.", file=sys.stderr)
+    raise SystemExit(2)
