@@ -1,0 +1,23 @@
+TIMEWARRIOR · TIME DISTRIBUTION
+Period: 2026-10-26 00:00 CET → 2026-11-02 00:00 CET (end exclusive)
+Target: 35h 00m  |  Tracked: 20h 00m  |  Untracked: 15h 00m
+
+Distribution (share of the greater of target or tracked time)
+ 1  Development     15h 00m   42.9%  ██████████
+ 2  Meetings         3h 00m    8.6%  ██
+ 3  Planning         2h 00m    5.7%  █
+ 4  untracked       15h 00m   42.9%  ██████████
+
+              1
+        4444441111111
+      44444444111111111
+    444444444411111111111
+   44444444444111111111111
+   44444444444111111111111
+  4444444444441111111111111
+   44444444444211111111111
+   44444444443221111111111
+    444444443322211111111
+      44444333222211111
+        4433332222211
+              2

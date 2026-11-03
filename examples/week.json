@@ -1,0 +1,7 @@
+[
+  {"id": 5, "start": "20261026T080000Z", "end": "20261026T130000Z", "tags": ["Development"]},
+  {"id": 4, "start": "20261027T080000Z", "end": "20261027T130000Z", "tags": ["Development"]},
+  {"id": 3, "start": "20261028T080000Z", "end": "20261028T110000Z", "tags": ["Meetings"]},
+  {"id": 2, "start": "20261029T080000Z", "end": "20261029T100000Z", "tags": ["Planning"]},
+  {"id": 1, "start": "20261030T080000Z", "end": "20261030T130000Z", "tags": ["Development"]}
+]

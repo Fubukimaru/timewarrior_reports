@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "timewarrior-visual-report"
+version = "0.1.0"
+description = "Terminal time distribution and working-week coverage for Timewarrior"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+timew-report = "timew_report:main"
+
+[tool.setuptools]
+py-modules = ["timew_report", "calendar_report"]

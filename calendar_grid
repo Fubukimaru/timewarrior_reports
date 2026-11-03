@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""Timewarrior calendar grid extension."""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from timew_report import main
+
+raise SystemExit(main(["--extension", "--view", "calendar"]))

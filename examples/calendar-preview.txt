@@ -1,0 +1,23 @@
+TIMEWARRIOR · CALENDAR GRID
+Period: 2026-10-26 00:00 CET → 2026-11-02 00:00 CET (end exclusive)
+Target: 35h 00m  |  Tracked: 20h 00m  |  Untracked: 15h 00m
+Daily gaps: 15h 00m  |  Daily overtime: 0h 00m
+
+Each cell: task shares of daily target (or tracked time when over target).
+Gray / . = untracked; footer = tracked/target; + = over daily target.
+
+    Mon        Tue        Wed        Thu        Fri        Sat        Sun    
++----------+----------+----------+----------+----------+----------+----------+
+|26 Oct    |27 Oct    |28 Oct    |29 Oct    |30 Oct    |31 Oct    |01 Nov    |
+|1.........|1.........|..........|..........|1.........|          |          |
+|1111111111|1111111111|222.......|..........|1111111111|          |          |
+|1111111111|1111111111|2222222222|333333333.|1111111111|          |          |
+|5:00/7:00 |5:00/7:00 |3:00/7:00 |2:00/7:00 |5:00/7:00 |off       |off       |
++----------+----------+----------+----------+----------+----------+----------+
+
+Tasks (colors stay the same across all days)
+  1  Development  15h 00m
+  2  Meetings  3h 00m
+  3  Planning  2h 00m
+  .  untracked (daily gaps)  15h 00m
+Small tasks may round to zero blocks; all durations are included in the totals.
