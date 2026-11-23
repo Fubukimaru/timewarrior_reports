@@ -1,6 +1,6 @@
 # Timewarrior reports
 
-Two Timewarrior extensions provide a pie-chart report and a calendar grid. They
+Three Timewarrior extensions provide a pie chart, calendar grid and terminal Gantt chart. They
 require Python 3.10+ and Timewarrior. No Python packages are needed.
 
 ## Install
@@ -11,7 +11,7 @@ From the project directory:
 ./install.sh
 ```
 
-The installer copies both report launchers and their shared Python module to
+The installer copies the report launchers and Python modules to
 `~/.timewarrior/extensions`. Rerun it to update them. To use another extensions
 directory, set `TIMEWARRIOR_EXTENSIONS_DIR` when running the installer.
 
@@ -21,6 +21,7 @@ directory, set `TIMEWARRIOR_EXTENSIONS_DIR` when running the installer.
 timew report pie_chart :week :color
 timew report calendar_grid :week :color
 timew report calendar_grid :month :color
+timew report gantt_chart :month
 timew report pie_chart :lastweek
 timew report calendar_grid 2026-10-26 - 2026-11-02
 timew report calendar_grid :week work
@@ -32,6 +33,10 @@ Monday through Friday each contribute 7 hours, weekends contribute zero, and
 holidays are not deducted.
 
 ## Reports
+
+The Gantt chart prints one timeline per local day. Each cell represents 30
+elapsed minutes from midnight. Task markers match the legend, `.` means idle,
+and `*` means multiple tasks shared the slot. Totals use actual durations.
 
 The pie report summarizes work by complete tag combination. Untagged intervals
 are grouped as `untagged`. The calendar grid shows each day's distribution, with

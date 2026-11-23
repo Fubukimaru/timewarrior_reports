@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""Timewarrior terminal Gantt chart extension."""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from timew_report import run_extension
+
+raise SystemExit(run_extension("gantt"))

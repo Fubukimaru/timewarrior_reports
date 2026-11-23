@@ -293,7 +293,7 @@ def render_calendar(groups, entries, start, end, zone, weekly_hours, color):
 
 def run_extension(view):
     try:
-        if view not in ("pie", "calendar"):
+        if view not in ("pie", "calendar", "gantt"):
             raise ValueError(f"Unknown report view: {view}")
         zone = local_zone()
         now = datetime.now(UTC)
@@ -310,6 +310,9 @@ def run_extension(view):
         color = color and "NO_COLOR" not in os.environ
         if view == "calendar":
             print(render_calendar(groups, entries, start, end, zone, WEEKLY_HOURS, color))
+        elif view == "gantt":
+            from gantt_report import render_gantt
+            print(render_gantt(groups, entries, start, end, zone, color))
         else:
             target = expected_seconds(start, end, zone, WEEKLY_HOURS)
             print(render(groups, start, end, zone, target, color))
@@ -320,5 +323,5 @@ def run_extension(view):
 
 
 if __name__ == "__main__":
-    print("Run this report through Timewarrior: timew report pie_chart or calendar_grid.", file=sys.stderr)
+    print("Run this report through Timewarrior: timew report pie_chart, calendar_grid or gantt_chart.", file=sys.stderr)
     raise SystemExit(2)
