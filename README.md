@@ -14,6 +14,8 @@ From the project directory:
 The installer copies the report launchers and Python modules to
 `~/.timewarrior/extensions`. Rerun it to update them. To use another extensions
 directory, set `TIMEWARRIOR_EXTENSIONS_DIR` when running the installer.
+The `timew-tags` command is installed to `~/.local/bin`; ensure that directory
+is on your `PATH`, or set `TIMEWARRIOR_REPORTS_BIN_DIR` to another directory.
 
 ## Run
 
@@ -25,7 +27,21 @@ timew report gantt_chart :month
 timew report pie_chart :lastweek
 timew report calendar_grid 2026-10-26 - 2026-11-02
 timew report calendar_grid :week work
+timew-tags :week meeting coding
+timew-tags pie_chart 2026-01-01 - 2026-12-30 code read meeting
+timew-tags 2026-10-26 - 2026-11-02 meeting coding
+timew-tags from 2026-10-26 for 3days -- meeting 'project work'
 ```
+
+`timew-tags` reports each requested tag independently, including intervals with
+other tags. It defaults to `:week` when no range is given. For multiword ranges
+other than `START - END` or `START to END`, put `--` between the range and tags.
+Quote tags containing spaces. A matching interval with multiple requested tags
+contributes to each tag, while the matching-time total counts it once. Intervals
+tagged `fundae` or `deporte` count only for those tags when explicitly requested.
+Add `pie_chart` before the range for a chart of the individual tag totals; its
+slices include overlapping time in each matching tag.
+The existing reports and their native Timewarrior tag filters are unchanged.
 
 Timewarrior supplies the selected range and interval data to the extensions. A
 finite date range is required. The weekly work target is fixed at 35 hours:

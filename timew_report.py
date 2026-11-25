@@ -119,6 +119,31 @@ def summarize(records, start, end, now):
     return sorted(totals.items(), key=lambda pair: (-pair[1], pair[0])), entries
 
 
+def summarize_requested_tags(records, requested, start, end, now):
+    """Count each matching interval once per requested tag and once overall."""
+    # Validate the input and reject overlapping intervals using the shared rules.
+    summarize(records, start, end, now)
+    totals = dict.fromkeys(requested, 0.0)
+    matched = 0.0
+    for record in records:
+        left = max(timestamp(record["start"]), start)
+        right = min(timestamp(record["end"]) if record.get("end") else now, end, now)
+        if right <= left:
+            continue
+        tags = set(record.get("tags", []))
+        selected = tags.intersection(totals)
+        # Out-of-work intervals contribute only to explicitly requested
+        # out-of-work tags, never to work tag totals.
+        if tags.intersection(OUT_OF_WORK_TAGS):
+            selected.intersection_update(OUT_OF_WORK_TAGS)
+        if selected:
+            seconds = (right - left).total_seconds()
+            matched += seconds
+            for tag in selected:
+                totals[tag] += seconds
+    return totals, matched
+
+
 def duration(seconds):
     minutes = int(seconds / 60 + 0.5)
     return f"{minutes // 60}h {minutes % 60:02d}m"
@@ -293,7 +318,7 @@ def render_calendar(groups, entries, start, end, zone, weekly_hours, color):
 
 def run_extension(view):
     try:
-        if view not in ("pie", "calendar", "gantt"):
+        if view not in ("pie", "calendar", "gantt", "tags"):
             raise ValueError(f"Unknown report view: {view}")
         zone = local_zone()
         now = datetime.now(UTC)
@@ -305,6 +330,28 @@ def run_extension(view):
         if start >= end:
             raise ValueError("The end date must be after the start date")
         records = json.loads(payload)
+        if view == "tags":
+            requested = json.loads(os.environ.get("TIMEW_REPORT_REQUESTED_TAGS", "null"))
+            if not isinstance(requested, list) or not requested or any(not isinstance(tag, str) or not tag for tag in requested):
+                raise ValueError("Run this report through timew-tags with at least one tag")
+            requested = list(dict.fromkeys(requested))
+            totals, matched = summarize_requested_tags(records, requested, start, end, now)
+            print("TIMEWARRIOR · REQUESTED TAGS")
+            print(f"Period: {start.astimezone(zone):%Y-%m-%d %H:%M %Z} → {end.astimezone(zone):%Y-%m-%d %H:%M %Z} (end exclusive)")
+            for tag, seconds in totals.items():
+                print(f"  {safe_label(tag)}  {duration(seconds)}")
+            print(f"Matching time (counted once): {duration(matched)}")
+            print("Tag totals may overlap. Out-of-work intervals count only for explicitly requested out-of-work tags.")
+            if os.environ.get("TIMEW_REPORT_TAG_VIEW") == "pie":
+                color = config.get("color", "").strip().lower() in ("on", "1", "yes", "y", "true")
+                color = color and "NO_COLOR" not in os.environ
+                slices = [(safe_label(tag), seconds, index)
+                          for index, (tag, seconds) in enumerate(totals.items()) if seconds]
+                print("\nPie chart: share of tag totals (overlapping time appears in each tag).")
+                for index, (tag, seconds, palette) in enumerate(slices):
+                    print(paint(f"  {marker(index)}  {tag}  {duration(seconds)}", palette, color))
+                print("\n".join(pie(slices, color)))
+            return 0
         groups, entries = summarize(records, start, end, now)
         color = config.get("color", "").strip().lower() in ("on", "1", "yes", "y", "true")
         color = color and "NO_COLOR" not in os.environ

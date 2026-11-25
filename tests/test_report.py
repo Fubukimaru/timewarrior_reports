@@ -72,6 +72,49 @@ class ReportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Overlapping"):
             report.summarize(records, self.start, self.end, self.now)
 
+    def test_requested_tag_totals_and_exclusions(self):
+        records = [
+            {"start": "20261026T080000Z", "end": "20261026T090000Z", "tags": ["meeting", "project"]},
+            {"start": "20261026T090000Z", "end": "20261026T110000Z", "tags": ["coding"]},
+            {"start": "20261026T110000Z", "end": "20261026T113000Z", "tags": ["meeting", "coding", "coding"]},
+            {"start": "20261026T113000Z", "end": "20261026T123000Z", "tags": ["meeting", "deporte"]},
+        ]
+        totals, matched = report.summarize_requested_tags(records, ["meeting", "coding", "missing", "deporte"], self.start, self.end, self.now)
+        self.assertEqual(totals, {"meeting": 5400, "coding": 9000, "missing": 0, "deporte": 3600})
+        self.assertEqual(matched, 16200)
+        totals, matched = report.summarize_requested_tags(records, ["meeting"], report.timestamp("20261026T083000Z"), report.timestamp("20261026T113000Z"), report.timestamp("20261026T111500Z"))
+        self.assertEqual(totals["meeting"], 2700)
+        self.assertEqual(matched, 2700)
+
+    @unittest.skipUnless(shutil.which("timew"), "Timewarrior is not installed")
+    def test_tag_command_with_real_timewarrior(self):
+        with tempfile.TemporaryDirectory() as directory:
+            environment = dict(os.environ, TIMEWARRIORDB=directory, TZ="UTC")
+            extensions = Path(directory, "extensions")
+            extensions.mkdir()
+            extensions.joinpath("tag_totals").symlink_to(Path("tag_totals").resolve())
+            data = Path(directory, "intervals.json")
+            data.write_text(json.dumps([
+                {"start": "20261026T080000Z", "end": "20261026T090000Z", "tags": ["meeting"]},
+                {"start": "20261026T090000Z", "end": "20261026T100000Z", "tags": ["coding"]},
+                {"start": "20261026T100000Z", "end": "20261026T110000Z", "tags": ["meeting", "coding"]},
+            ]))
+            imported = subprocess.run(["timew", "import", str(data)], env=environment, capture_output=True, text=True)
+            self.assertEqual(imported.returncode, 0, imported.stderr)
+            result = subprocess.run(["./timew-tags", "2026-10-26T08:30", "-", "2026-10-26T10:30", "meeting", "coding", "missing"], env=environment, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("meeting  1h 00m", result.stdout)
+            self.assertIn("coding  1h 30m", result.stdout)
+            self.assertIn("missing  0h 00m", result.stdout)
+            self.assertIn("Matching time (counted once): 2h 00m", result.stdout)
+            chart = subprocess.run(["./timew-tags", "pie_chart", "2026-10-26T08:30", "-", "2026-10-26T10:30", "meeting", "coding"], env=environment, capture_output=True, text=True)
+            self.assertEqual(chart.returncode, 0, chart.stderr)
+            self.assertIn("meeting  1h 00m", chart.stdout)
+            self.assertIn("coding  1h 30m", chart.stdout)
+            self.assertIn("Matching time (counted once): 2h 00m", chart.stdout)
+            self.assertIn("Pie chart: share of tag totals", chart.stdout)
+            self.assertNotIn("pie_chart  0h", chart.stdout)
+
     def test_tag_and_terminal_controls(self):
         records = [{"start": "20261026T080000Z", "end": "20261026T090000Z", "tags": ["hello\n\033[2J"]}]
         groups, _ = report.summarize(records, self.start, self.end, self.now)
